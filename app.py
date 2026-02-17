@@ -6,7 +6,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from authlib.integrations.flask_client import OAuth
 
 # app = Flask(__name__)
-app = Flask(__name__, static_folder='static', template_folder='templates')
+# app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(
+    __name__,
+    static_folder=os.path.join(os.getcwd(), 'static'),
+    template_folder=os.path.join(os.getcwd(), 'templates')
+)
 
 
 # ================= SECRET KEY =================
@@ -228,4 +233,5 @@ with app.app_context():
     # app.run(debug=True)
 
 # IMPORTANT: NO app.run() FOR DEPLOY
+
 
