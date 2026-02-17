@@ -1,0 +1,228 @@
+import os
+from datetime import timedelta
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
+from authlib.integrations.flask_client import OAuth
+
+app = Flask(__name__)
+
+# ================= SECRET KEY =================
+app.secret_key = os.environ.get("SECRET_KEY", "fallback_secret")
+
+# ================= DATABASE CONFIG =================
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL:
+    app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///victor.db'
+
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# ================= OAUTH =================
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'}
+)
+
+# ================= SESSION =================
+app.permanent_session_lifetime = timedelta(days=7)
+
+db = SQLAlchemy(app)
+
+# ================= ADMIN =================
+ADMIN_USERNAME = "victoradmin"
+ADMIN_PASSWORD = "12345"
+
+# ================= MODELS =================
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(200))
+    role = db.Column(db.String(20), default="user")
+
+class Booking(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100))
+    phone = db.Column(db.String(20))
+    address = db.Column(db.String(200))
+    service = db.Column(db.String(100))
+    price = db.Column(db.Integer)
+    status = db.Column(db.String(20), default="Pending")
+
+class Lead(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100))
+    email = db.Column(db.String(100))
+    message = db.Column(db.String(300))
+
+# ================= ADMIN CREATE =================
+def create_admin():
+    admin = User.query.filter_by(username=ADMIN_USERNAME).first()
+    if not admin:
+        hashed = generate_password_hash(ADMIN_PASSWORD)
+        admin_user = User(username=ADMIN_USERNAME, password=hashed, role="admin")
+        db.session.add(admin_user)
+        db.session.commit()
+
+# ================= ROUTES =================
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+# SERVICES DATA
+services_data = [
+    {"name": "AC Repair & Installation", "price": 499, "img": "ac.jpg"},
+    {"name": "Electrician", "price": 299, "img": "electric.jpg"},
+    {"name": "Plumbing", "price": 199, "img": "plumbing.jpg"},
+    {"name": "Wall Painting", "price": 799, "img": "painting.jpg"},
+    {"name": "Garden Maintenance", "price": 399, "img": "garden.jpg"},
+    {"name": "Pest Control", "price": 599, "img": "pest.jpg"},
+]
+
+@app.route('/services')
+def services():
+    return render_template('services.html', services=services_data)
+
+@app.route('/about')
+def about():
+    return render_template('about.html')
+
+@app.route('/contact', methods=['GET','POST'])
+def contact():
+    if request.method == 'POST':
+        lead = Lead(
+            name=request.form['name'],
+            email=request.form['email'],
+            message=request.form['message']
+        )
+        db.session.add(lead)
+        db.session.commit()
+        flash("Message Sent Successfully!")
+        return redirect(url_for('contact'))
+    return render_template('contact.html')
+
+# ================= GOOGLE LOGIN =================
+@app.route('/google-login')
+def google_login():
+    return google.authorize_redirect(url_for('google_callback', _external=True))
+
+@app.route('/google-callback')
+def google_callback():
+    token = google.authorize_access_token()
+    user_info = token['userinfo']
+    session['user'] = user_info['email']
+    session['role'] = "user"
+    return redirect(url_for('home'))
+
+# ================= LOGIN =================
+@app.route('/login', methods=['GET','POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        user = User.query.filter_by(username=username).first()
+
+        if user and check_password_hash(user.password, password):
+            session.permanent = True
+            session['user'] = user.username
+            session['role'] = user.role
+            flash("Login Success")
+
+            if user.role == "admin":
+                return redirect(url_for('admin'))
+            return redirect(url_for('home'))
+
+        flash("Invalid Credentials")
+
+    return render_template('login.html')
+
+# ================= SIGNUP =================
+@app.route('/signup', methods=['GET','POST'])
+def signup():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        existing = User.query.filter_by(username=username).first()
+        if existing:
+            flash("Username Already Exists")
+            return redirect(url_for('signup'))
+
+        hashed = generate_password_hash(password)
+        new_user = User(username=username, password=hashed, role="user")
+        db.session.add(new_user)
+        db.session.commit()
+
+        flash("Account Created. Please Login.")
+        return redirect(url_for('login'))
+
+    return render_template('signup.html')
+
+# ================= ADMIN PANEL =================
+@app.route('/admin')
+def admin():
+    if session.get('role') != "admin":
+        return redirect(url_for('home'))
+
+    bookings = Booking.query.all()
+    leads = Lead.query.all()
+    pending = Booking.query.filter_by(status="Pending").count()
+    done = Booking.query.filter_by(status="Done").count()
+
+    return render_template(
+        'admin.html',
+        bookings=bookings,
+        pending=pending,
+        leads=leads,
+        done=done
+    )
+
+@app.route('/complete/<int:id>')
+def complete_booking(id):
+    if session.get('role') != "admin":
+        return redirect(url_for('home'))
+
+    booking = Booking.query.get_or_404(id)
+    booking.status = "Done"
+    db.session.commit()
+    return redirect(url_for('admin'))
+
+# ================= BOOK SERVICE =================
+@app.route('/book/<service>/<int:price>', methods=['GET','POST'])
+def book_service(service, price):
+    if request.method == 'POST':
+        new_booking = Booking(
+            name=request.form['name'],
+            phone=request.form['phone'],
+            address=request.form['address'],
+            service=service,
+            price=price
+        )
+        db.session.add(new_booking)
+        db.session.commit()
+        flash("Service Booked Successfully!")
+        return redirect(url_for('home'))
+
+    return render_template('booking.html', service=service, price=price)
+
+# ================= LOGOUT =================
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash("Logged Out")
+    return redirect(url_for('home'))
+
+# ================= INIT DB =================
+with app.app_context():
+    db.create_all()
+    create_admin()
+    # app.run(debug=True)
+
+# IMPORTANT: NO app.run() FOR DEPLOY
