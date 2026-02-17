@@ -5,7 +5,9 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from authlib.integrations.flask_client import OAuth
 
-app = Flask(__name__)
+# app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
+
 
 # ================= SECRET KEY =================
 app.secret_key = os.environ.get("SECRET_KEY", "fallback_secret")
@@ -226,3 +228,4 @@ with app.app_context():
     # app.run(debug=True)
 
 # IMPORTANT: NO app.run() FOR DEPLOY
+
